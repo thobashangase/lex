@@ -59,7 +59,7 @@ npm run build
 - SQLite persists orders across restarts and enforces a unique `(CustomerId, SubmissionKey)` index. A single atomic save stores the order and its lines. Prices and item names are snapshotted.
 - Checkout requires an `Idempotency-Key` UUID header. Repeating it with the same product IDs and quantities returns the original order (200, versus 201 for a new order). Reusing it for a changed cart returns 409. Sorting cart lines does not change the fingerprint. Concurrent submissions are protected by the database constraint.
 - The browser stores an in-flight key and cart in localStorage before submission, retains them on network/server errors and reloads, and locks cart edits until a retry confirms the result. Successful checkout clears them. Definitive client errors unlock the cart. Distinct keys represent distinct purchase attempts; identical carts with different keys are permitted.
-- Validation uses Problem Details responses, data annotations and business rules. The frontend displays validation and connection errors and success messages. Catalog price values in client requests are never trusted.
+- Minimal API routes are grouped in `ShopEndpoints` and registered through `app.MapShopEndpoints()` in `Program.cs`. Request binding and business rules return Problem Details for invalid input. The frontend displays validation and connection errors and success messages. Catalog price values in client requests are never trusted.
 
 ## Storage and seeding
 

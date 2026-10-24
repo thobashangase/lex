@@ -1,4 +1,3 @@
-using System.ComponentModel.DataAnnotations;
 using Microsoft.EntityFrameworkCore;
 namespace Shop.Api;
 public class Product {
@@ -31,9 +30,9 @@ public class OrderLine {
  public long UnitPriceCents { get; set; }
  public long LineTotalCents { get; set; }
 }
-// MVC validates positional records through constructor parameters, not property-targeted attributes.
-public record CartLine([Range(1, int.MaxValue)] int ProductId, [Range(1, 99)] int Quantity);
-public record CheckoutRequest([Required, MinLength(1), MaxLength(50)] List<CartLine> Items);
+// PricingService and OrderService validate these requests for every caller.
+public record CartLine(int ProductId, int Quantity);
+public record CheckoutRequest(List<CartLine> Items);
 public record QuoteLine(int ProductId, string Name, int Quantity, long UnitPriceCents, long LineTotalCents);
 public record Quote(List<QuoteLine> Lines, long SubtotalCents, long DeliveryCents, long TotalCents, string Currency = "ZAR");
 public class ShopDb(DbContextOptions<ShopDb> options) : DbContext(options) {

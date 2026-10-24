@@ -1,4 +1,3 @@
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Shop.Api;
 var builder = WebApplication.CreateBuilder(args);
@@ -7,15 +6,16 @@ builder.Services.AddScoped<IProductCatalog, ProductCatalog>();
 builder.Services.AddScoped<PricingService>();
 builder.Services.AddScoped<OrderService>();
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddControllers();
+builder.Services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
 builder.Services.AddProblemDetails();
 var app = builder.Build();
 app.UseExceptionHandler();
 app.Use(async (context, next) => {
  try { await next(context); }
  catch (ShopException ex) { await Results.Problem(statusCode:ex.Status, title:ex.Message).ExecuteAsync(context); }
+ catch (BadHttpRequestException ex) { await Results.Problem(statusCode:ex.StatusCode, title:"Invalid request.", detail:ex.Message).ExecuteAsync(context); }
 });
 using (var scope = app.Services.CreateScope()) await SeedData.Initialize(scope.ServiceProvider.GetRequiredService<ShopDb>());
-app.MapControllers();
+app.MapShopEndpoints();
 app.Run();
 public partial class Program { }
