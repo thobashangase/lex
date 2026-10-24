@@ -93,6 +93,6 @@ Bootstrap provides responsive forms/layout with custom styling. No Bootstrap Jav
 
 ## Verification in this workspace
 
-Docker image builds and Compose startup pass, with both containers healthy. HTTP smoke checks pass for the Angular page, nginx API routing, six seeded products, pricing and the free-delivery threshold, invalid carts, required checkout keys, order history, and missing-order responses. No orders were created during these checks. Port 8080 was occupied in this workspace, so the verified running instance uses http://localhost:8090 (`SHOP_PORT=8090 docker compose up --build -d --wait`).
+Docker image builds and Compose startup pass, with both containers healthy. HTTP smoke checks pass for the Angular page, nginx API routing, six seeded products, pricing and the free-delivery threshold, invalid carts, required checkout keys, order history, and missing-order responses. No orders were created during these checks. Port 8087 was occupied in this workspace, so the verified running instance uses http://localhost:8090 (`SHOP_PORT=8090 docker compose up --build -d --wait`).
 
 The API and test project compile with zero warnings/errors, and the Angular production build passes. The test runner could not execute inside the filesystem sandbox because MSBuild requires a local IPC socket; permission to run the tests outside the sandbox was declined. Test outcomes and browser interactions are therefore unverified. Run `dotnet test Shop.sln` locally to execute the suite.

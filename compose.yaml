@@ -12,7 +12,7 @@ services:
     build:
       context: ./src/frontend
     ports:
-      - "127.0.0.1:${SHOP_PORT:-8080}:80"
+      - "127.0.0.1:${SHOP_PORT:-8087}:80"
     depends_on:
       api:
         condition: service_healthy
