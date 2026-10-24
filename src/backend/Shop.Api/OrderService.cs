@@ -25,6 +25,19 @@ public class PricingService(IProductCatalog catalog) {
 }
 public class OrderService(ShopDb db, PricingService pricing, TimeProvider clock) {
  public const string Customer = "demo-customer";
+ public async Task<Order> Cancel(Guid id) {
+  // The status predicate and update execute together, so a fulfilled order cannot be overwritten.
+  await db.Orders.Where(x => x.Id == id && x.CustomerId == Customer &&
+    (x.Status == OrderStatus.Pending || x.Status == OrderStatus.Confirmed))
+   .ExecuteUpdateAsync(update => update.SetProperty(x => x.Status, OrderStatus.Cancelled));
+  var order = await db.Orders.AsNoTracking().Include(x => x.Lines)
+   .SingleOrDefaultAsync(x => x.Id == id && x.CustomerId == Customer)
+   ?? throw new ShopException("Order not found.", 404);
+  if (order.Status != OrderStatus.Cancelled)
+   throw new ShopException("Fulfilled orders cannot be cancelled.", 409);
+  return order;
+ }
+
  public async Task<(Order Order, bool Replayed)> Checkout(CheckoutRequest request, string key) {
   if (!Guid.TryParseExact(key, "D", out _)) throw new ShopException("Provide a UUID Idempotency-Key header.");
   key = key.ToLowerInvariant();

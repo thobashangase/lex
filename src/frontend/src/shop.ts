@@ -7,7 +7,7 @@ interface Product { id:number; name:string; description:string; category:string;
 interface CartLine { productId:number; quantity:number }
 interface Quote { subtotalCents:number; deliveryCents:number; totalCents:number; currency:string }
 interface OrderLine { productId:number; name:string; quantity:number; unitPriceCents:number; lineTotalCents:number }
-interface Order extends Quote { id:string; createdAt:string; status:string; lines:OrderLine[] }
+interface Order extends Quote { id:string; createdAt:string; status:'Pending'|'Confirmed'|'Fulfilled'|'Cancelled'; lines:OrderLine[] }
 interface Pending { key:string; items:CartLine[] }
 @Component({selector:'app-root',standalone:true,imports:[CommonModule,FormsModule],templateUrl:'./shop.html'})
 export class AppComponent implements OnInit {
@@ -59,7 +59,7 @@ export class AppComponent implements OnInit {
    const p=this.pending()!;
    const order=await firstValueFrom(this.http.post<Order>('/api/orders',{items:p.items},{headers:{'Idempotency-Key':p.key}}));
    localStorage.removeItem('little-shop-pending');this.pending.set(null);this.cart.set([]);this.quote.set(null);
-   this.message.set(`Order ${order.id.slice(0,8)} confirmed. Thank you for shopping with us!`);
+   this.message.set(`Order ${order.id.slice(0,8)} placed. Status: ${order.status}. Thank you for shopping with us!`);
    this.view.set('orders');await this.loadOrders();
   }catch(e){
    if(e instanceof HttpErrorResponse && e.status>=400 && e.status<500 && e.status!==408 && e.status!==429){
@@ -72,6 +72,16 @@ export class AppComponent implements OnInit {
   this.busy.set(true);this.error.set('');
   try{this.orders.set(await firstValueFrom(this.http.get<Order[]>('/api/orders')));}
   catch(e){this.fail(e);}finally{this.busy.set(false);}
+ }
+ canCancel(order:Order) {return order.status==='Pending'||order.status==='Confirmed';}
+ async cancelOrder(order:Order) {
+  if(this.busy()||!this.canCancel(order))return;
+  this.busy.set(true);this.error.set('');this.message.set('');
+  try {
+   const updated=await firstValueFrom(this.http.post<Order>(`/api/orders/${order.id}/cancel`,{}));
+   this.orders.update(orders=>orders.map(x=>x.id===updated.id?updated:x));
+   this.message.set(`Order ${updated.id.slice(0,8)} cancelled. No payment was taken for this demo order.`);
+  }catch(e){this.fail(e);}finally{this.busy.set(false);}
  }
  async showOrders() {this.view.set('orders');await this.loadOrders();}
  private fail(e:unknown) {

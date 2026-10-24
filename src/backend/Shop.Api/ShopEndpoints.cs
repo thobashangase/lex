@@ -13,6 +13,7 @@ public static class ShopEndpoints
         group.MapPost("/orders", Checkout);
         group.MapGet("/orders", GetOrders);
         group.MapGet("/orders/{id:guid}", GetOrder);
+        group.MapPost("/orders/{id:guid}/cancel", CancelOrder);
 
         return group;
     }
@@ -62,4 +63,9 @@ public static class ShopEndpoints
             ? Results.Problem(statusCode: 404, title: "Order not found.")
             : Results.Ok(order);
     }
+    private static async Task<IResult> CancelOrder(Guid id, OrderService orders)
+    {
+        return Results.Ok(await orders.Cancel(id));
+    }
+
 }
