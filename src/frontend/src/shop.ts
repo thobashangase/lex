@@ -7,11 +7,13 @@ interface Product { id:number; name:string; description:string; category:string;
 interface CartLine { productId:number; quantity:number }
 interface Quote { subtotalCents:number; deliveryCents:number; totalCents:number; currency:string }
 interface OrderLine { productId:number; name:string; quantity:number; unitPriceCents:number; lineTotalCents:number }
-interface Order extends Quote { id:string; createdAt:string; status:'Pending'|'Confirmed'|'Fulfilled'|'Cancelled'; lines:OrderLine[] }
+interface Order extends Quote { id:string; createdAt:string; status:string; lines:OrderLine[] }
+interface OrderStatus { name:string; isFinal:boolean; allowedTransitions:string[] }
 interface Pending { key:string; items:CartLine[] }
 @Component({selector:'app-root',standalone:true,imports:[CommonModule,FormsModule],templateUrl:'./shop.html'})
 export class AppComponent implements OnInit {
  private http = inject(HttpClient);
+ statuses=signal<OrderStatus[]>([]); selectedStatuses:Record<string,string>={};
  products=signal<Product[]>([]); cart=signal<CartLine[]>([]); orders=signal<Order[]>([]);
  quote=signal<Quote|null>(null); view=signal<'shop'|'orders'>('shop'); busy=signal(false); loading=signal(true);
  message=signal(''); error=signal(''); search=''; category='All'; pending=signal<Pending|null>(null);
@@ -70,10 +72,31 @@ export class AppComponent implements OnInit {
  }
  async loadOrders() {
   this.busy.set(true);this.error.set('');
-  try{this.orders.set(await firstValueFrom(this.http.get<Order[]>('/api/orders')));}
+  try{
+   const [orders,statuses]=await Promise.all([
+    firstValueFrom(this.http.get<Order[]>('/api/orders')),
+    firstValueFrom(this.http.get<OrderStatus[]>('/api/order-statuses'))
+   ]);
+   this.orders.set(orders);this.statuses.set(statuses);this.selectedStatuses={};
+  }
   catch(e){this.fail(e);}finally{this.busy.set(false);}
  }
- canCancel(order:Order) {return order.status==='Pending'||order.status==='Confirmed';}
+ availableStatuses(order:Order) {
+  const status=this.statuses().find(x=>x.name===order.status);
+  return status&&!status.isFinal?status.allowedTransitions:[];
+ }
+ canCancel(order:Order) {return this.availableStatuses(order).includes('Cancelled');}
+ async updateStatus(order:Order) {
+  const status=this.selectedStatuses[order.id];
+  if(this.busy()||!status||!this.availableStatuses(order).includes(status))return;
+  this.busy.set(true);this.error.set('');this.message.set('');
+  try {
+   const updated=await firstValueFrom(this.http.patch<Order>(`/api/orders/${order.id}/status`,{status,expectedStatus:order.status}));
+   this.orders.update(orders=>orders.map(x=>x.id===updated.id?updated:x));
+   delete this.selectedStatuses[order.id];
+   this.message.set(`Order ${updated.id.slice(0,8)} status changed to ${updated.status}.`);
+  }catch(e){this.fail(e);}finally{this.busy.set(false);}
+ }
  async cancelOrder(order:Order) {
   if(this.busy()||!this.canCancel(order))return;
   this.busy.set(true);this.error.set('');this.message.set('');

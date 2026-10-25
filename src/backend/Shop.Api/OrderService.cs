@@ -25,16 +25,32 @@ public class PricingService(IProductCatalog catalog) {
 }
 public class OrderService(ShopDb db, PricingService pricing, TimeProvider clock) {
  public const string Customer = "demo-customer";
- public async Task<Order> Cancel(Guid id) {
-  // The status predicate and update execute together, so a fulfilled order cannot be overwritten.
-  await db.Orders.Where(x => x.Id == id && x.CustomerId == Customer &&
-    (x.Status == OrderStatus.Pending || x.Status == OrderStatus.Confirmed))
-   .ExecuteUpdateAsync(update => update.SetProperty(x => x.Status, OrderStatus.Cancelled));
+ public Task<Order> Cancel(Guid id) => ChangeStatus(id, OrderStatusNames.Cancelled);
+
+ public async Task<Order> ChangeStatus(Guid id, string? target, string? expectedStatus = null) {
   var order = await db.Orders.AsNoTracking().Include(x => x.Lines)
    .SingleOrDefaultAsync(x => x.Id == id && x.CustomerId == Customer)
    ?? throw new ShopException("Order not found.", 404);
-  if (order.Status != OrderStatus.Cancelled)
-   throw new ShopException("Fulfilled orders cannot be cancelled.", 409);
+  if (string.IsNullOrWhiteSpace(target) || !await db.OrderStatuses.AnyAsync(x => x.Name == target))
+   throw new ShopException("Choose a valid order status.");
+  // A retry of an already-applied update is successful, including terminal statuses.
+  if (order.Status == target) return order;
+  if (expectedStatus is not null && expectedStatus != order.Status)
+   throw new ShopException("The order status has changed. Refresh your orders and try again.", 409);
+  var current = await db.OrderStatuses.AsNoTracking().SingleAsync(x => x.Name == order.Status);
+  if (current.IsFinal)
+   throw new ShopException($"{current.Name} orders cannot change status.", 409);
+  if (!await db.OrderStatusTransitions.AnyAsync(x => x.FromStatus == order.Status && x.ToStatus == target))
+   throw new ShopException($"Cannot change an order from {order.Status} to {target}.", 409);
+  // Compare and update atomically: concurrent requests cannot overwrite a later state.
+  var changed = await db.Orders.Where(x => x.Id == id && x.CustomerId == Customer && x.Status == order.Status)
+   .ExecuteUpdateAsync(update => update.SetProperty(x => x.Status, target));
+  if (changed == 0) {
+   var latest = await db.Orders.AsNoTracking().Include(x => x.Lines).SingleAsync(x => x.Id == id && x.CustomerId == Customer);
+   if (latest.Status == target) return latest;
+   throw new ShopException("The order status has changed. Refresh your orders and try again.", 409);
+  }
+  order.Status = target;
   return order;
  }
 

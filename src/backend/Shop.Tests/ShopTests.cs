@@ -48,7 +48,7 @@ public class ShopTests {
   var first = await service.Checkout(new([new(1,2)]),key);
   var replay = await service.Checkout(new([new(1,2)]),key);
   Assert.False(first.Replayed); Assert.True(replay.Replayed);
-  Assert.Equal(OrderStatus.Pending, first.Order.Status);
+  Assert.Equal(OrderStatusNames.Pending, first.Order.Status);
   Assert.Equal(first.Order.Id,replay.Order.Id); Assert.Equal(26500,replay.Order.TotalCents);
   Assert.Equal(1, await db.Orders.CountAsync());
   mock.Verify(x => x.GetProducts(It.IsAny<IEnumerable<int>>()), Times.Once);
@@ -73,11 +73,11 @@ public class ShopTests {
    Assert.NotEmpty(order.Lines);
    Assert.Equal(order.SubtotalCents + order.DeliveryCents, order.TotalCents);
   });
-  var pending = seeded.Single(x => x.Status == OrderStatus.Pending);
+  var pending = seeded.Single(x => x.Status == OrderStatusNames.Pending);
   var (pricing,_) = Pricing(100);
   await new OrderService(db,pricing,TimeProvider.System).Cancel(pending.Id);
   await SeedData.Initialize(db);
-  Assert.Equal(OrderStatus.Cancelled, await db.Orders.AsNoTracking().Where(x => x.Id == pending.Id).Select(x => x.Status).SingleAsync());
+  Assert.Equal(OrderStatusNames.Cancelled, await db.Orders.AsNoTracking().Where(x => x.Id == pending.Id).Select(x => x.Status).SingleAsync());
   Assert.Equal(4, await db.Orders.CountAsync());
  }
  [Fact] public async Task ConcurrentSubmissionsCreateOnlyOneOrder() {
@@ -100,10 +100,10 @@ public class ShopTests {
  }
 
  [Theory]
- [InlineData(OrderStatus.Pending)]
- [InlineData(OrderStatus.Confirmed)]
- [InlineData(OrderStatus.Cancelled)]
- public async Task CancellationIsSafeToRepeatAndPreservesPrices(OrderStatus status) {
+ [InlineData(OrderStatusNames.Pending)]
+ [InlineData(OrderStatusNames.Confirmed)]
+ [InlineData(OrderStatusNames.Cancelled)]
+ public async Task CancellationIsSafeToRepeatAndPreservesPrices(string status) {
   await using var connection = new SqliteConnection("Data Source=:memory:"); await connection.OpenAsync();
   await using var db = new ShopDb(new DbContextOptionsBuilder<ShopDb>().UseSqlite(connection).Options);
   await db.Database.EnsureCreatedAsync();
@@ -115,26 +115,26 @@ public class ShopTests {
   await db.SaveChangesAsync();
   var cancelled = await service.Cancel(created.Order.Id);
   var repeated = await service.Cancel(created.Order.Id);
-  Assert.Equal(OrderStatus.Cancelled, cancelled.Status);
-  Assert.Equal(OrderStatus.Cancelled, repeated.Status);
+  Assert.Equal(OrderStatusNames.Cancelled, cancelled.Status);
+  Assert.Equal(OrderStatusNames.Cancelled, repeated.Status);
   Assert.Equal(created.Order.TotalCents, cancelled.TotalCents);
   Assert.Equal(2, Assert.Single(cancelled.Lines).Quantity);
   Assert.Equal(created.Order.CreatedAt, cancelled.CreatedAt);
   Assert.Equal(1, await db.Orders.CountAsync());
   var replay = await service.Checkout(new([new(1,2)]),key);
   Assert.True(replay.Replayed);
-  Assert.Equal(OrderStatus.Cancelled,replay.Order.Status);
+  Assert.Equal(OrderStatusNames.Cancelled,replay.Order.Status);
   mock.Verify(x => x.GetProducts(It.IsAny<IEnumerable<int>>()), Times.Once);
  }
  [Fact] public async Task FulfilledOrderCannotBeCancelled() {
   await using var connection = new SqliteConnection("Data Source=:memory:"); await connection.OpenAsync();
   await using var db = new ShopDb(new DbContextOptionsBuilder<ShopDb>().UseSqlite(connection).Options);
   await SeedData.Initialize(db);
-  var order = await db.Orders.SingleAsync(x => x.Status == OrderStatus.Fulfilled);
+  var order = await db.Orders.SingleAsync(x => x.Status == OrderStatusNames.Fulfilled);
   var (pricing,_) = Pricing(100);
   var error = await Assert.ThrowsAsync<ShopException>(() => new OrderService(db,pricing,TimeProvider.System).Cancel(order.Id));
   Assert.Equal(409,error.Status);
-  Assert.Equal(OrderStatus.Fulfilled, await db.Orders.AsNoTracking().Where(x => x.Id == order.Id).Select(x => x.Status).SingleAsync());
+  Assert.Equal(OrderStatusNames.Fulfilled, await db.Orders.AsNoTracking().Where(x => x.Id == order.Id).Select(x => x.Status).SingleAsync());
  }
  [Theory][InlineData(false)][InlineData(true)]
  public async Task MissingOrAnotherCustomersOrderReturnsNotFound(bool exists) {
@@ -149,7 +149,7 @@ public class ShopTests {
   var (pricing,_) = Pricing(100);
   var error = await Assert.ThrowsAsync<ShopException>(() => new OrderService(db,pricing,TimeProvider.System).Cancel(id));
   Assert.Equal(404,error.Status);
-  if(exists) Assert.Equal(OrderStatus.Pending,await db.Orders.AsNoTracking().Select(x => x.Status).SingleAsync());
+  if(exists) Assert.Equal(OrderStatusNames.Pending,await db.Orders.AsNoTracking().Select(x => x.Status).SingleAsync());
  }
 
 }

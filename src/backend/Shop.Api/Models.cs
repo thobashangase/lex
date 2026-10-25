@@ -1,5 +1,4 @@
 using Microsoft.EntityFrameworkCore;
-using System.Text.Json.Serialization;
 namespace Shop.Api;
 public class Product {
  public int Id { get; set; }
@@ -9,16 +8,13 @@ public class Product {
  public string Icon { get; set; } = "";
  public long PriceCents { get; set; }
 }
-[JsonConverter(typeof(JsonStringEnumConverter<OrderStatus>))]
-public enum OrderStatus { Pending, Confirmed, Fulfilled, Cancelled }
-
 public class Order {
  public Guid Id { get; set; } = Guid.NewGuid();
  public string CustomerId { get; set; } = "demo-customer";
  public string SubmissionKey { get; set; } = "";
  public string Fingerprint { get; set; } = "";
  public DateTime CreatedAt { get; set; }
- public OrderStatus Status { get; set; } = OrderStatus.Pending;
+ public string Status { get; set; } = OrderStatusNames.Pending;
  public string Currency { get; set; } = "ZAR";
  public long SubtotalCents { get; set; }
  public long DeliveryCents { get; set; }
@@ -42,8 +38,16 @@ public record Quote(List<QuoteLine> Lines, long SubtotalCents, long DeliveryCent
 public class ShopDb(DbContextOptions<ShopDb> options) : DbContext(options) {
  public DbSet<Product> Products => Set<Product>();
  public DbSet<Order> Orders => Set<Order>();
+ public DbSet<OrderStatus> OrderStatuses => Set<OrderStatus>();
+ public DbSet<OrderStatusTransition> OrderStatusTransitions => Set<OrderStatusTransition>();
  protected override void OnModelCreating(ModelBuilder b) {
-  b.Entity<Order>().Property(x => x.Status).HasConversion<string>();
+  b.Entity<OrderStatus>().HasKey(x => x.Name);
+  b.Entity<OrderStatus>().HasData(OrderStatusData.Statuses);
+  b.Entity<OrderStatusTransition>().HasKey(x => new { x.FromStatus, x.ToStatus });
+  b.Entity<OrderStatusTransition>().HasOne<OrderStatus>().WithMany().HasForeignKey(x => x.FromStatus).OnDelete(DeleteBehavior.Restrict);
+  b.Entity<OrderStatusTransition>().HasOne<OrderStatus>().WithMany().HasForeignKey(x => x.ToStatus).OnDelete(DeleteBehavior.Restrict);
+  b.Entity<OrderStatusTransition>().HasData(OrderStatusData.Transitions);
+  b.Entity<Order>().HasOne<OrderStatus>().WithMany().HasForeignKey(x => x.Status).OnDelete(DeleteBehavior.Restrict);
   b.Entity<Order>().HasIndex(x => new { x.CustomerId, x.SubmissionKey }).IsUnique();
   b.Entity<Order>().HasMany(x => x.Lines).WithOne().HasForeignKey(x => x.OrderId);
  }
@@ -51,6 +55,7 @@ public class ShopDb(DbContextOptions<ShopDb> options) : DbContext(options) {
 public static class SeedData {
  public static async Task Initialize(ShopDb db) {
   await db.Database.EnsureCreatedAsync();
+  await OrderStatusData.UpgradeExistingDatabase(db);
   if (!await db.Products.AnyAsync()) {
   db.Products.AddRange(
    new Product { Id=1, Name="Everyday headphones", Description="Wireless comfort for your daily soundtrack.", Category="Audio", Icon="🎧", PriceCents=89900 },
@@ -65,10 +70,10 @@ public static class SeedData {
  }
  private static async Task SeedOrders(ShopDb db) {
   var examples = new[] {
-   (Id: Guid.Parse("10000001-0000-0000-0000-000000000001"), Status: OrderStatus.Pending, DaysAgo: 2, ProductId: 2, Quantity: 2),
-   (Id: Guid.Parse("10000002-0000-0000-0000-000000000002"), Status: OrderStatus.Confirmed, DaysAgo: 5, ProductId: 3, Quantity: 1),
-   (Id: Guid.Parse("10000003-0000-0000-0000-000000000003"), Status: OrderStatus.Fulfilled, DaysAgo: 12, ProductId: 1, Quantity: 2),
-   (Id: Guid.Parse("10000004-0000-0000-0000-000000000004"), Status: OrderStatus.Cancelled, DaysAgo: 20, ProductId: 5, Quantity: 3)
+   (Id: Guid.Parse("10000001-0000-0000-0000-000000000001"), Status: OrderStatusNames.Pending, DaysAgo: 2, ProductId: 2, Quantity: 2),
+   (Id: Guid.Parse("10000002-0000-0000-0000-000000000002"), Status: OrderStatusNames.Confirmed, DaysAgo: 5, ProductId: 3, Quantity: 1),
+   (Id: Guid.Parse("10000003-0000-0000-0000-000000000003"), Status: OrderStatusNames.Fulfilled, DaysAgo: 12, ProductId: 1, Quantity: 2),
+   (Id: Guid.Parse("10000004-0000-0000-0000-000000000004"), Status: OrderStatusNames.Cancelled, DaysAgo: 20, ProductId: 5, Quantity: 3)
   };
   var pricing = new PricingService(new ProductCatalog(db));
   var now = DateTime.UtcNow;

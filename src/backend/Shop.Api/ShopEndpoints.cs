@@ -9,6 +9,8 @@ public static class ShopEndpoints
         var group = endpoints.MapGroup("/api").WithTags("Shop");
 
         group.MapGet("/products", GetProducts);
+        group.MapGet("/order-statuses", GetStatuses);
+        group.MapPatch("/orders/{id:guid}/status", ChangeStatus);
         group.MapPost("/cart/quote", GetQuote);
         group.MapPost("/orders", Checkout);
         group.MapGet("/orders", GetOrders);
@@ -66,6 +68,22 @@ public static class ShopEndpoints
     private static async Task<IResult> CancelOrder(Guid id, OrderService orders)
     {
         return Results.Ok(await orders.Cancel(id));
+    }
+
+    private static async Task<IResult> GetStatuses(ShopDb db)
+    {
+        var statuses = await db.OrderStatuses.AsNoTracking().OrderBy(x => x.SortOrder).ToListAsync();
+        var transitions = await db.OrderStatusTransitions.AsNoTracking().ToListAsync();
+        return Results.Ok(statuses.Select(status => new {
+            status.Name, status.IsFinal,
+            AllowedTransitions = transitions.Where(x => x.FromStatus == status.Name)
+                .OrderBy(x => statuses.FindIndex(s => s.Name == x.ToStatus)).Select(x => x.ToStatus).ToArray()
+        }));
+    }
+
+    private static async Task<IResult> ChangeStatus(Guid id, StatusChangeRequest request, OrderService orders)
+    {
+        return Results.Ok(await orders.ChangeStatus(id, request.Status, request.ExpectedStatus));
     }
 
 }
