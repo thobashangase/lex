@@ -38,6 +38,7 @@ public record Quote(List<QuoteLine> Lines, long SubtotalCents, long DeliveryCent
 public class ShopDb(DbContextOptions<ShopDb> options) : DbContext(options) {
  public DbSet<Product> Products => Set<Product>();
  public DbSet<Order> Orders => Set<Order>();
+ public DbSet<ProcessedWriteCommand> ProcessedWriteCommands => Set<ProcessedWriteCommand>();
  public DbSet<OrderStatus> OrderStatuses => Set<OrderStatus>();
  public DbSet<OrderStatusTransition> OrderStatusTransitions => Set<OrderStatusTransition>();
  protected override void OnModelCreating(ModelBuilder b) {

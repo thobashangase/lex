@@ -19,5 +19,5 @@ ENV ASPNETCORE_HTTP_PORTS=8080 \
 USER app
 EXPOSE 8080
 HEALTHCHECK --interval=5s --timeout=3s --start-period=30s --retries=12 \
-    CMD curl --fail --silent http://localhost:8080/api/products > /dev/null || exit 1
+    CMD curl --fail --silent http://localhost:8080/api/health > /dev/null || exit 1
 ENTRYPOINT ["dotnet", "Shop.Api.dll"]

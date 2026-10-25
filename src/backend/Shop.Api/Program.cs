@@ -5,6 +5,10 @@ builder.Services.AddDbContext<ShopDb>(o => o.UseSqlite(builder.Configuration.Get
 builder.Services.AddScoped<IProductCatalog, ProductCatalog>();
 builder.Services.AddScoped<PricingService>();
 builder.Services.AddScoped<OrderService>();
+builder.Services.AddScoped<WriteCommandProcessor>();
+builder.Services.AddSingleton<RabbitMqWriteQueue>();
+builder.Services.AddSingleton<IOrderWriteQueue>(services => services.GetRequiredService<RabbitMqWriteQueue>());
+builder.Services.AddHostedService(services => services.GetRequiredService<RabbitMqWriteQueue>());
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
 builder.Services.AddProblemDetails();
@@ -15,7 +19,7 @@ app.Use(async (context, next) => {
  catch (ShopException ex) { await Results.Problem(statusCode:ex.Status, title:ex.Message).ExecuteAsync(context); }
  catch (BadHttpRequestException ex) { await Results.Problem(statusCode:ex.StatusCode, title:"Invalid request.", detail:ex.Message).ExecuteAsync(context); }
 });
-using (var scope = app.Services.CreateScope()) await SeedData.Initialize(scope.ServiceProvider.GetRequiredService<ShopDb>());
+
 app.MapShopEndpoints();
 app.Run();
 public partial class Program { }

@@ -10,9 +10,9 @@ With Docker Desktop running (or Docker Engine with Compose v2.17+), run from the
 docker compose up --build -d --wait
 ```
 
-Open http://localhost:8080. Docker builds both apps, seeds the catalog, and waits for healthy services. Only Docker is required on your machine; the SDK and Node dependencies are installed in build containers. The first build downloads images and dependencies and requires internet access.
+Open http://localhost:8090. Docker builds both apps, starts RabbitMQ, seeds the catalog through the write consumer, and waits for healthy services. Only Docker is required on your machine; the SDK and Node dependencies are installed in build containers. The first build downloads images and dependencies and requires internet access.
 
-The frontend serves the Angular production build through nginx and forwards `/api` to the API on the internal Compose network. SQLite data lives in the `shop-data` named volume and survives container rebuilds and shutdowns. The API runs as the non-root `app` user and is not published directly to the host.
+The frontend serves the Angular production build through nginx and forwards `/api` to the API on the internal Compose network. SQLite data lives in the `shop-data` named volume and survives container rebuilds and shutdowns. RabbitMQ commands persist in the `rabbitmq-data` named volume, with a stable broker hostname across container rebuilds. The broker is only accessible on the internal Compose network. The API runs as the non-root `app` user and is not published directly to the host.
 
 ```sh
 docker compose logs -f     # Follow logs; Ctrl+C exits the log viewer
@@ -21,11 +21,17 @@ docker compose down        # Stop and remove containers, retaining orders
 
 For a different port, use `SHOP_PORT=8090 docker compose up --build -d --wait` and open http://localhost:8090. Run the startup command again after source changes to rebuild the images.
 
-To reset the demo, `docker compose down --volumes` deletes the SQLite volume **and all orders**. Start again to recreate and seed the database. Container data is separate from the database used by the manual setup below.
+To reset the demo, `docker compose down --volumes` deletes the SQLite and RabbitMQ volumes **including all orders and queued commands**. Start again to recreate and seed the database. Container data is separate from the database used by the manual setup below.
 
 ## Run locally without Docker
 
-Prerequisites: .NET SDK 10, Node.js 22.12+ within the 22.x line, npm.
+Prerequisites: .NET SDK 10, Node.js 22.12+ within the 22.x line, npm, and a running RabbitMQ broker. The API defaults to localhost:5672, virtual host `/`, username `shop` and password `shop-demo-password`. Configure other connections using `RabbitMq__Host`, `RabbitMq__Port`, `RabbitMq__VirtualHost`, `RabbitMq__Username` and `RabbitMq__Password`. These default credentials are for the demo.
+
+If you do not have RabbitMQ installed, start a local broker in another terminal:
+
+```sh
+docker run --rm -p 127.0.0.1:5672:5672 -e RABBITMQ_DEFAULT_USER=shop -e RABBITMQ_DEFAULT_PASS=shop-demo-password rabbitmq:4-management-alpine
+```
 
 From the repository root:
 
@@ -56,10 +62,28 @@ npm run build
 - Prices use ZAR and integer cents. Prices include applicable taxes; no separate tax is added. Delivery costs R65, with free delivery from R1,000 inclusive. No real payment or customer address is collected.
 - Statuses and permitted transitions live in the `OrderStatuses` and `OrderStatusTransitions` lookup tables, rather than an enum. Orders use `Pending`, `Confirmed`, `Fulfilled` and `Cancelled` statuses. New checkouts start at `Pending`. My orders shows newest first, with item prices, delivery, total and colour-coded status; Refresh status fetches the current stored status. Pending and Confirmed orders offer a Cancel order button. Repeating cancellation returns the same cancelled order; Fulfilled orders return 409 and cannot be cancelled. Cancellation preserves item prices and totals for reference; no real payment or refund occurs. The Change status selector allows Pending → Confirmed and Confirmed → Fulfilled, or cancellation from either active state. Fulfilled and Cancelled are final and cannot be reopened; retrying the same status is a successful no-op. The API validates transitions and detects concurrent changes (409). Status controls are available to the shared demo user; there is no authentication or staff-role separation.
 - Everyone uses the same seeded demo customer, Alex (`demo-customer`). There is no authentication: customer identity is fixed on the server. Do not use this demo for private customer data.
-- SQLite persists orders across restarts and enforces a unique `(CustomerId, SubmissionKey)` index. A single atomic save stores the order and its lines. Prices and item names are snapshotted.
+- SQLite persists orders across restarts and enforces a unique `(CustomerId, SubmissionKey)` index. The serialized command worker atomically commits the order, its lines and a processed-command receipt. Prices and item names are snapshotted.
 - Checkout requires an `Idempotency-Key` UUID header. Repeating it with the same product IDs and quantities returns the original order (200, versus 201 for a new order). Reusing it for a changed cart returns 409. Sorting cart lines does not change the fingerprint. Concurrent submissions are protected by the database constraint.
 - The browser stores an in-flight key and cart in localStorage before submission, retains them on network/server errors and reloads, and locks cart edits until a retry confirms the result. Successful checkout clears them. Definitive client errors unlock the cart. Distinct keys represent distinct purchase attempts; identical carts with different keys are permitted.
 - Minimal API routes are grouped in `ShopEndpoints` and registered through `app.MapShopEndpoints()` in `Program.cs`. Request binding and business rules return Problem Details for invalid input. The frontend displays validation and connection errors and success messages. Catalog price values in client requests are never trusted.
+
+## Queued database writes
+
+All application write endpoints (checkout, cancellation and status changes) publish commands to RabbitMQ; they never call the database write service directly. Schema initialization and demo seeding run in the same consumer before the API serves requests. Product, quote and order reads still query SQLite directly.
+
+`shop.database-writes.v1` is durable, uses persistent messages and publisher confirms, and enables a single active consumer with prefetch 1. The consumer completes one command before receiving another, including when other consumers are connected. This serializes application writes and reduces SQLite lock contention. It does not prevent locks from external SQL tools or other applications. Keep a single API instance for this demo; any future consumer replicas must share the same SQLite database, not separate container files.
+
+HTTP requests wait up to 25 seconds for a correlated reply and retain the existing 200/201/400/404/409 responses. Success is returned after database commit. A broker outage, publish failure or reply timeout returns 503. A timeout is an uncertain result: the queued command may still complete. Refresh orders before retrying status changes; checkout retries must retain the original `Idempotency-Key` (the frontend already does this).
+
+The worker commits the mutation and a `ProcessedWriteCommands` receipt together. RabbitMQ redelivery after a lost acknowledgment returns that receipt rather than applying the mutation again. Checkout submission keys provide a second layer of deduplication across separate HTTP requests. Business validation errors are saved as terminal replies. Infrastructure failures are retried three times with a fresh EF scope; exhausted or malformed commands are rejected to `shop.database-writes.failed.v1` for inspection. Failed commands do not replay automatically from the failed queue. After fixing the cause, an operator can inspect/requeue them; first check whether the associated order already completed. Single-node RabbitMQ and its failed queue are demo infrastructure, not a highly available deployment.
+
+The API's `/api/health` endpoint includes queue connection readiness. The .NET client reconnects automatically after broker connection failures; durable commands can be redelivered. There is no in-process direct-write fallback. Command receipts retain original order response snapshots and are not automatically pruned; introduce retention appropriate to the maximum replay window before production use.
+
+Inspect queue state:
+
+```sh
+docker compose exec rabbitmq rabbitmqctl list_queues name messages_ready messages_unacknowledged consumers
+```
 
 ## Storage and seeding
 
@@ -71,6 +95,7 @@ To reset the demo, stop the API and delete its `shop.db` and any `shop.db-wal` /
 
 | Method | Path | Behaviour |
 | --- | --- | --- |
+| GET | `/api/health` | API/write-queue readiness |
 | GET | `/api/products` | Seeded catalog |
 | GET | `/api/order-statuses` | Status names, final-state flags and allowed next statuses |
 | PATCH | `/api/orders/{id}/status` | Update status with `{ "status": "Confirmed", "expectedStatus": "Pending" }`; 400 unknown status, 409 invalid transition or stale state |
@@ -92,12 +117,12 @@ Responses expose monetary amounts as integer `*Cents` properties and currency `Z
 
 ## Tests
 
-`Shop.Tests` uses xUnit, Moq and AutoFixture. It covers delivery thresholds, totals, quantity limits, missing products, empty carts, duplicate lines, invalid keys, replay/conflict behaviour, repeatable seeding, concurrent submissions, status seeding, cancellation eligibility, repeat cancellation, price preservation and customer ownership, allowed and forbidden status transitions, lookup-driven configuration, stale updates and legacy database upgrades. Database tests use real SQLite (including an isolated file for concurrency), so unique constraints are exercised.
+`Shop.Tests` uses xUnit, Moq and AutoFixture. It covers delivery thresholds, totals, quantity limits, missing products, empty carts, duplicate lines, invalid keys, replay/conflict behaviour, repeatable seeding, concurrent submissions, status seeding, cancellation eligibility, repeat cancellation, price preservation and customer ownership, allowed and forbidden status transitions, lookup-driven configuration, stale updates, legacy database upgrades, command redelivery, receipt conflicts and transactional rollback. Database tests use real SQLite (including an isolated file for concurrency), so unique constraints are exercised.
 
 Bootstrap provides responsive forms/layout with custom styling. No Bootstrap JavaScript is required.
 
 ## Verification in this workspace
 
-Docker image builds and Compose startup pass, with both containers healthy. HTTP smoke checks pass for the Angular page, nginx API routing, six seeded products, pricing and the free-delivery threshold, invalid carts, required checkout keys, order history, and missing-order responses. Status lookup and PATCH checks also pass for same-status retries, invalid targets and final-state protection. The existing SQLite volume upgraded successfully and order history was preserved. No orders were created during these checks. Port 8087 was occupied in this workspace, so the verified running instance uses http://localhost:8090 (`SHOP_PORT=8090 docker compose up --build -d --wait`).
+Docker builds and Compose startup pass with the API, frontend and RabbitMQ healthy. The existing SQLite volume upgraded in place with a processed-command receipt table. The running instance remains at http://localhost:8090 (`SHOP_PORT=8090 docker compose up --build -d --wait`).
 
-The API and test project compile with zero warnings/errors, and the Angular production build passes. All 35 business tests pass in an isolated .NET SDK Docker container with the source mounted read-only, including cancellation, status transitions, repeatable seeding and legacy database upgrades. Browser interactions have not been manually verified. Run `dotnet test Shop.sln` locally to execute the suite.
+All 40 business and command-processing tests pass in an isolated .NET SDK container. An additional isolated Compose stack verified 30 concurrent checkout submissions, duplicate-key protection, independent orders, status transitions, conflicting updates, validation, single-active-consumer/prefetch settings and malformed-message dead-lettering. Broker outage checks confirmed reads remain available, writes return 503, and writes recover automatically without restarting the API. Verification data and containers were removed; the running shop's order history was preserved. Browser interactions have not been manually verified.

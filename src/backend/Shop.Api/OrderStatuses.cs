@@ -46,6 +46,12 @@ public static class OrderStatusData
     {
         await using var transaction = await db.Database.BeginTransactionAsync();
         await db.Database.ExecuteSqlRawAsync("""
+            CREATE TABLE IF NOT EXISTS "ProcessedWriteCommands" (
+                "Id" TEXT NOT NULL PRIMARY KEY,
+                "PayloadHash" TEXT NOT NULL,
+                "ResponseJson" TEXT NOT NULL,
+                "CompletedAt" TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS "OrderStatuses" (
                 "Name" TEXT NOT NULL PRIMARY KEY,
                 "IsFinal" INTEGER NOT NULL,

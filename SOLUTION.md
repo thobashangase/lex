@@ -10,4 +10,5 @@ The solution is split into a .NET API project for the backend business logic and
 ## Design
 
 - Minimal APIs on back-end as this is the recommended approach for .NET 8+ apps, it is cleaner and familiar to developers coming from backgrounds such as Node.js and Python
-- For demo purposes, certain data is seeded and setup such that it is available at all times, including after a database truncation or application server restart
+- For demo purposes, certain data is seeded and setup such that it is available at all times, including after a database truncation or application server restart.
+- Adds RabbitMQ to apply the pub/sub pattern to database writes to resolve potential database concurrent writes as user traffic on the app grows (think of busy periods such as the upcoming Black Friday online sales)

@@ -9,6 +9,7 @@ public static class ShopEndpoints
         var group = endpoints.MapGroup("/api").WithTags("Shop");
 
         group.MapGet("/products", GetProducts);
+        group.MapGet("/health", (IOrderWriteQueue writes) => writes.IsReady ? Results.Ok(new { status = "Ready" }) : Results.Problem(statusCode: 503, title: "Write queue unavailable."));
         group.MapGet("/order-statuses", GetStatuses);
         group.MapPatch("/orders/{id:guid}/status", ChangeStatus);
         group.MapPost("/cart/quote", GetQuote);
@@ -32,15 +33,16 @@ public static class ShopEndpoints
     }
 
     private static async Task<IResult> Checkout(
-        CheckoutRequest request, OrderService orders, HttpContext context)
+        CheckoutRequest request, IOrderWriteQueue writes, HttpContext context)
     {
         var key = context.Request.Headers["Idempotency-Key"].ToString();
-        var result = await orders.Checkout(request, key);
+        var result = await writes.Send(new WriteCommand(Guid.NewGuid(), "checkout", Checkout: request, Key: key), context.RequestAborted);
+        EnsureSuccess(result);
         context.Response.Headers["Idempotency-Replayed"] = result.Replayed.ToString().ToLowerInvariant();
 
         return result.Replayed
             ? Results.Ok(result.Order)
-            : Results.Created($"/api/orders/{result.Order.Id}", result.Order);
+            : Results.Created($"/api/orders/{result.Order!.Id}", result.Order);
     }
 
     private static async Task<IResult> GetOrders(ShopDb db)
@@ -65,9 +67,11 @@ public static class ShopEndpoints
             ? Results.Problem(statusCode: 404, title: "Order not found.")
             : Results.Ok(order);
     }
-    private static async Task<IResult> CancelOrder(Guid id, OrderService orders)
+    private static async Task<IResult> CancelOrder(Guid id, IOrderWriteQueue writes, HttpContext context)
     {
-        return Results.Ok(await orders.Cancel(id));
+        var result = await writes.Send(new WriteCommand(Guid.NewGuid(), "cancel", OrderId: id), context.RequestAborted);
+        EnsureSuccess(result);
+        return Results.Ok(result.Order);
     }
 
     private static async Task<IResult> GetStatuses(ShopDb db)
@@ -81,9 +85,16 @@ public static class ShopEndpoints
         }));
     }
 
-    private static async Task<IResult> ChangeStatus(Guid id, StatusChangeRequest request, OrderService orders)
+    private static async Task<IResult> ChangeStatus(Guid id, StatusChangeRequest request, IOrderWriteQueue writes, HttpContext context)
     {
-        return Results.Ok(await orders.ChangeStatus(id, request.Status, request.ExpectedStatus));
+        var result = await writes.Send(new WriteCommand(Guid.NewGuid(), "status", OrderId: id, Status: request.Status, ExpectedStatus: request.ExpectedStatus), context.RequestAborted);
+        EnsureSuccess(result);
+        return Results.Ok(result.Order);
+    }
+
+    private static void EnsureSuccess(WriteReply reply)
+    {
+        if (reply.StatusCode >= 400) throw new ShopException(reply.Error ?? "Write failed.", reply.StatusCode);
     }
 
 }

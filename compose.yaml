@@ -1,9 +1,32 @@
 name: little-shop
 
 services:
+  rabbitmq:
+    hostname: rabbitmq
+    image: rabbitmq:4-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: shop
+      RABBITMQ_DEFAULT_PASS: shop-demo-password
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
   api:
     build:
       context: ./src/backend
+    environment:
+      RabbitMq__Host: rabbitmq
+      RabbitMq__Username: shop
+      RabbitMq__Password: shop-demo-password
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
     volumes:
       - shop-data:/data
     restart: unless-stopped
@@ -12,7 +35,7 @@ services:
     build:
       context: ./src/frontend
     ports:
-      - "127.0.0.1:${SHOP_PORT:-8087}:80"
+      - "127.0.0.1:${SHOP_PORT:-8090}:80"
     depends_on:
       api:
         condition: service_healthy
@@ -21,3 +44,4 @@ services:
 
 volumes:
   shop-data:
+  rabbitmq-data:
