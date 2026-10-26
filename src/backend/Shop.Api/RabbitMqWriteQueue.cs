@@ -125,6 +125,7 @@ public class RabbitMqWriteQueue(IServiceScopeFactory scopes, IConfiguration conf
                 if (!initialized)
                 {
                     await SeedData.Initialize(scope.ServiceProvider.GetRequiredService<ShopDb>());
+                    await scope.ServiceProvider.GetRequiredService<ReferenceDataCache>().RefreshAfterWrite();
                     initialized = true;
                 }
                 reply = command.Type == "initialize" ? new WriteReply(200)

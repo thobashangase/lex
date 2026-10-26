@@ -21,9 +21,9 @@ public static class ShopEndpoints
         return group;
     }
 
-    private static async Task<IResult> GetProducts(ShopDb db)
+    private static async Task<IResult> GetProducts(ReferenceDataCache cache)
     {
-        var products = await db.Products.AsNoTracking().OrderBy(x => x.Id).ToListAsync();
+        var products = await cache.Products();
         return Results.Ok(products);
     }
 
@@ -74,15 +74,9 @@ public static class ShopEndpoints
         return Results.Ok(result.Order);
     }
 
-    private static async Task<IResult> GetStatuses(ShopDb db)
+    private static async Task<IResult> GetStatuses(ReferenceDataCache cache)
     {
-        var statuses = await db.OrderStatuses.AsNoTracking().OrderBy(x => x.SortOrder).ToListAsync();
-        var transitions = await db.OrderStatusTransitions.AsNoTracking().ToListAsync();
-        return Results.Ok(statuses.Select(status => new {
-            status.Name, status.IsFinal,
-            AllowedTransitions = transitions.Where(x => x.FromStatus == status.Name)
-                .OrderBy(x => statuses.FindIndex(s => s.Name == x.ToStatus)).Select(x => x.ToStatus).ToArray()
-        }));
+        return Results.Ok(await cache.Statuses());
     }
 
     private static async Task<IResult> ChangeStatus(Guid id, StatusChangeRequest request, IOrderWriteQueue writes, HttpContext context)

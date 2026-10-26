@@ -11,4 +11,5 @@ The solution is split into a .NET API project for the backend business logic and
 
 - Minimal APIs on back-end as this is the recommended approach for .NET 8+ apps, it is cleaner and familiar to developers coming from backgrounds such as Node.js and Python
 - For demo purposes, certain data is seeded and setup such that it is available at all times, including after a database truncation or application server restart.
+- Database hits can get pretty expensive. The addition of Redis cache is to address this problem by reducing round trips to the db, particularly for data that rarely changes. Measures to detect updates and periodic refreshed have been put in place to ensure data reliability.
 - Adds RabbitMQ to apply the pub/sub pattern to database writes to resolve potential database concurrent writes as user traffic on the app grows (think of busy periods such as the upcoming Black Friday online sales)

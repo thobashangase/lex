@@ -24,7 +24,7 @@ public interface IOrderWriteQueue
 
 // The order mutation and its saved result commit together. A redelivery after a lost
 // acknowledgment returns the saved result instead of applying an old mutation again.
-public class WriteCommandProcessor(ShopDb db, OrderService orders, TimeProvider clock)
+public class WriteCommandProcessor(ShopDb db, OrderService orders, TimeProvider clock, ReferenceDataCache? cache = null)
 {
     public async Task<WriteReply> Process(WriteCommand command)
     {
@@ -66,6 +66,7 @@ public class WriteCommandProcessor(ShopDb db, OrderService orders, TimeProvider 
         });
         await db.SaveChangesAsync();
         await transaction.CommitAsync();
+        if (cache is not null) await cache.RefreshAfterWrite();
         return reply;
     }
 }

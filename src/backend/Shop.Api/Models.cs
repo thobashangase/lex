@@ -38,10 +38,13 @@ public record Quote(List<QuoteLine> Lines, long SubtotalCents, long DeliveryCent
 public class ShopDb(DbContextOptions<ShopDb> options) : DbContext(options) {
  public DbSet<Product> Products => Set<Product>();
  public DbSet<Order> Orders => Set<Order>();
+ public DbSet<ReferenceDataVersion> ReferenceDataVersions => Set<ReferenceDataVersion>();
  public DbSet<ProcessedWriteCommand> ProcessedWriteCommands => Set<ProcessedWriteCommand>();
  public DbSet<OrderStatus> OrderStatuses => Set<OrderStatus>();
  public DbSet<OrderStatusTransition> OrderStatusTransitions => Set<OrderStatusTransition>();
  protected override void OnModelCreating(ModelBuilder b) {
+  b.Entity<ReferenceDataVersion>().HasKey(x => x.Name);
+  b.Entity<ReferenceDataVersion>().HasData(new ReferenceDataVersion { Name = "products" }, new ReferenceDataVersion { Name = "statuses" });
   b.Entity<OrderStatus>().HasKey(x => x.Name);
   b.Entity<OrderStatus>().HasData(OrderStatusData.Statuses);
   b.Entity<OrderStatusTransition>().HasKey(x => new { x.FromStatus, x.ToStatus });
@@ -57,6 +60,7 @@ public static class SeedData {
  public static async Task Initialize(ShopDb db) {
   await db.Database.EnsureCreatedAsync();
   await OrderStatusData.UpgradeExistingDatabase(db);
+  await ReferenceDataSchema.Initialize(db);
   if (!await db.Products.AnyAsync()) {
   db.Products.AddRange(
    new Product { Id=1, Name="Everyday headphones", Description="Wireless comfort for your daily soundtrack.", Category="Audio", Icon="🎧", PriceCents=89900 },
