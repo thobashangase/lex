@@ -20,6 +20,25 @@ public class ShopTests {
   Assert.Equal(delivery, quote.DeliveryCents); Assert.Equal(subtotal+delivery, quote.TotalCents);
   mock.Verify(x => x.GetProducts(It.IsAny<IEnumerable<int>>()), Times.Once);
  }
+ [Theory][InlineData(-1)][InlineData(-100)]
+ public async Task NegativePricesAreRejected(long price) {
+  var (service,_) = Pricing(price);
+  var error = await Assert.ThrowsAsync<ShopException>(() => service.Quote(new([new(1,1)])));
+  Assert.Contains("negative price", error.Message);
+ }
+ [Fact] public async Task ZeroPriceIsAllowed() {
+  var (service,_) = Pricing(0);
+  var quote = await service.Quote(new([new(1,1)]));
+  Assert.Equal(0,quote.SubtotalCents);
+  Assert.Equal(6500,quote.TotalCents);
+ }
+ [Fact] public async Task PositiveSubtotalCannotHideANegativeItemPrice() {
+  var catalog = new Mock<IProductCatalog>();
+  catalog.Setup(x => x.GetProducts(It.IsAny<IEnumerable<int>>())).ReturnsAsync([
+   new Product { Id=1, PriceCents=-100 }, new Product { Id=2, PriceCents=10000 }
+  ]);
+  await Assert.ThrowsAsync<ShopException>(() => new PricingService(catalog.Object).Quote(new([new(1,1),new(2,1)])));
+ }
  [Theory][InlineData(0)][InlineData(-1)][InlineData(100)]
  public async Task InvalidQuantityIsRejectedBeforeCatalogCall(int quantity) {
   var (service,mock) = Pricing(100);

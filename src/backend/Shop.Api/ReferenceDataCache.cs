@@ -1,6 +1,5 @@
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
-using StackExchange.Redis;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace Shop.Api;
 
@@ -9,19 +8,6 @@ public class ReferenceDataVersion
 {
     public string Name { get; set; } = "";
     public long Revision { get; set; }
-}
-
-public interface IReferenceCacheStore
-{
-    Task<string?> Get(string key);
-    Task Set(string key, string value, TimeSpan lifetime);
-}
-
-public class RedisReferenceCacheStore(IConnectionMultiplexer redis) : IReferenceCacheStore
-{
-    public async Task<string?> Get(string key) => await redis.GetDatabase().StringGetAsync(key);
-    public async Task Set(string key, string value, TimeSpan lifetime) =>
-        await redis.GetDatabase().StringSetAsync(key, value, lifetime);
 }
 
 public interface IReferenceDataSource
@@ -56,11 +42,10 @@ public class ReferenceDataSource(IServiceScopeFactory scopes) : IReferenceDataSo
     }
 }
 
-public class ReferenceDataCache(IReferenceCacheStore store, IReferenceDataSource source,
+public class ReferenceDataCache(IMemoryCache memory, IReferenceDataSource source,
     TimeProvider clock, ILogger<ReferenceDataCache> logger)
 {
     public static readonly TimeSpan Lifetime = TimeSpan.FromHours(1);
-    private readonly string epoch = Guid.NewGuid().ToString("N");
     private readonly Entry products = new("products");
     private readonly Entry statuses = new("statuses");
     private readonly SemaphoreSlim checking = new(1, 1);
@@ -68,55 +53,51 @@ public class ReferenceDataCache(IReferenceCacheStore store, IReferenceDataSource
     private sealed class Entry(string name)
     {
         public string Name { get; } = name;
-        public string Generation { get; set; } = Guid.NewGuid().ToString("N");
+        public object Key { get; } = new();
         public long Revision { get; set; } = -1;
         public bool Warm { get; set; }
         public DateTimeOffset LoadedAt { get; set; }
         public SemaphoreSlim Gate { get; } = new(1, 1);
     }
 
-    public Task<List<Product>> Products() => Get(products, source.Products);
-    public Task<List<OrderStatusOption>> Statuses() => Get(statuses, source.Statuses);
+    public async Task<List<Product>> Products()
+    {
+        var products = await Get(this.products, source.Products);
+        // Memory-cache values are shared objects. Return detached copies so callers
+        // cannot accidentally change prices or other data for subsequent requests.
+        return products.Select(x => new Product { Id = x.Id, Name = x.Name, Description = x.Description,
+            Category = x.Category, Icon = x.Icon, PriceCents = x.PriceCents }).ToList();
+    }
+    public async Task<List<OrderStatusOption>> Statuses()
+    {
+        var statuses = await Get(this.statuses, source.Statuses);
+        return statuses.Select(x => x with { AllowedTransitions = x.AllowedTransitions.ToArray() }).ToList();
+    }
 
     private async Task<T> Get<T>(Entry entry, Func<Task<T>> load)
     {
         await entry.Gate.WaitAsync();
         try
         {
-            try
-            {
-                var json = await store.Get(Key(entry));
-                if (json is not null && JsonSerializer.Deserialize<Envelope<T>>(json) is { } cached
-                    && cached.Value is not null && cached.ExpiresAt > clock.GetUtcNow()) return cached.Value;
-            }
-            catch (Exception exception) when (exception is RedisException or TimeoutException or JsonException)
-            {
-                logger.LogWarning(exception, "Reference cache read failed for {Dataset}; reading SQLite", entry.Name);
-            }
+            if (memory.TryGetValue(entry.Key, out Envelope<T>? cached) && cached is not null
+                && cached.Value is not null && cached.ExpiresAt > clock.GetUtcNow()) return cached.Value;
             return await Load(entry, load);
         }
         finally { entry.Gate.Release(); }
     }
 
-    // Called while holding the dataset gate. A new generation also prevents an old
-    // Redis entry resurfacing after failed invalidation or a Redis outage.
+    // Called while holding the dataset gate. Evict before reading SQLite so a failed
+    // refresh cannot leave old data available after an observed revision change.
     private async Task<T> Load<T>(Entry entry, Func<Task<T>> load)
     {
-        entry.Generation = Guid.NewGuid().ToString("N");
+        memory.Remove(entry.Key);
         var value = await load();
         entry.LoadedAt = clock.GetUtcNow();
         entry.Warm = true;
-        try
-        {
-            await store.Set(Key(entry), JsonSerializer.Serialize(new Envelope<T>(entry.LoadedAt + Lifetime, value)), Lifetime);
-        }
-        catch (Exception exception) when (exception is RedisException or TimeoutException)
-        {
-            logger.LogWarning(exception, "Reference cache fill failed for {Dataset}; returning SQLite data", entry.Name);
-        }
+        memory.Set(entry.Key, new Envelope<T>(entry.LoadedAt + Lifetime, value),
+            new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = Lifetime });
         return value;
     }
-    private string Key(Entry entry) => $"shop:reference:v1:{epoch}:{entry.Name}:{entry.Generation}";
 
     public async Task CheckForChanges()
     {
@@ -136,7 +117,7 @@ public class ReferenceDataCache(IReferenceCacheStore store, IReferenceDataSource
         {
             if (revision == entry.Revision) return;
             entry.Revision = revision;
-            entry.Generation = Guid.NewGuid().ToString("N");
+            memory.Remove(entry.Key);
             if (entry.Warm) { entry.LoadedAt = DateTimeOffset.MinValue; await Load(entry, load); }
         }
         finally { entry.Gate.Release(); }
@@ -160,7 +141,7 @@ public class ReferenceDataCache(IReferenceCacheStore store, IReferenceDataSource
         try { await CheckForChanges(); }
         catch (Exception exception)
         {
-            // A cache outage must never turn a committed write into an error response.
+            // A refresh failure must never turn a committed write into an error response.
             // SQLite's durable revision counters let the background check retry later.
             logger.LogWarning(exception, "Reference cache refresh after commit failed; background check will retry");
         }

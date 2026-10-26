@@ -1,16 +1,6 @@
 name: little-shop
 
 services:
-  redis:
-    image: redis:7-alpine
-    command: ["redis-server", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru", "--save", "", "--appendonly", "no"]
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    restart: unless-stopped
-
   rabbitmq:
     hostname: rabbitmq
     image: rabbitmq:4-management-alpine
@@ -31,13 +21,10 @@ services:
     build:
       context: ./src/backend
     environment:
-      Redis__ConnectionString: redis:6379
       RabbitMq__Host: rabbitmq
       RabbitMq__Username: shop
       RabbitMq__Password: shop-demo-password
     depends_on:
-      redis:
-        condition: service_healthy
       rabbitmq:
         condition: service_healthy
     volumes:

@@ -2,13 +2,14 @@ using AutoFixture;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Caching.Memory;
 using Moq;
 using Shop.Api;
 using Xunit;
 
 namespace Shop.Tests;
 
-public class ReferenceDataCacheTests
+public class ReferenceDataCacheTests : IDisposable
 {
     private sealed class Clock : TimeProvider
     {
@@ -17,27 +18,23 @@ public class ReferenceDataCacheTests
     }
     private readonly Fixture fixture = new();
     private readonly Clock clock = new();
-    private readonly Dictionary<string, string> values = [];
-    private readonly Mock<IReferenceCacheStore> store = new();
+    private readonly MemoryCache memory = new(new MemoryCacheOptions());
     private readonly Mock<IReferenceDataSource> source = new();
     private long productVersion;
     private long statusVersion;
 
     public ReferenceDataCacheTests()
     {
-        store.Setup(x => x.Get(It.IsAny<string>())).Returns((string key) => Task.FromResult(values.GetValueOrDefault(key)));
-        store.Setup(x => x.Set(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<TimeSpan>()))
-            .Returns((string key, string json, TimeSpan ttl) => { values[key] = json; Assert.Equal(TimeSpan.FromHours(1), ttl); return Task.CompletedTask; });
         source.Setup(x => x.Products()).ReturnsAsync(fixture.CreateMany<Product>(2).ToList());
         source.Setup(x => x.Statuses()).ReturnsAsync([new OrderStatusOption("Pending", false, ["Confirmed"])]);
         source.Setup(x => x.Versions()).Returns(() => Task.FromResult(new Dictionary<string, long> {
             ["products"] = productVersion, ["statuses"] = statusVersion
         }));
     }
-    private ReferenceDataCache Cache() => new(store.Object, source.Object, clock, NullLogger<ReferenceDataCache>.Instance);
+    private ReferenceDataCache Cache() => new(memory, source.Object, clock, NullLogger<ReferenceDataCache>.Instance);
 
     [Fact]
-    public async Task LoadsOnFirstCallAndReadsRedisOnSubsequentCalls()
+    public async Task LoadsOnFirstCallAndReadsMemoryOnSubsequentCalls()
     {
         var cache = Cache();
         await cache.CheckForChanges();
@@ -48,7 +45,7 @@ public class ReferenceDataCacheTests
         Assert.Equal(first.Select(x => x.Id), second.Select(x => x.Id));
         source.Verify(x => x.Products(), Times.Once);
         source.Verify(x => x.Statuses(), Times.Never);
-        store.Verify(x => x.Get(It.IsAny<string>()), Times.Exactly(2));
+        Assert.Equal(1, memory.Count);
     }
     [Fact]
     public async Task ConcurrentColdCallsLoadOnlyOnce()
@@ -100,37 +97,45 @@ public class ReferenceDataCacheTests
         await Cache().Products();
         await Cache().Products();
         source.Verify(x => x.Products(), Times.Exactly(2));
-        Assert.Equal(2, values.Count);
+        Assert.Equal(2, memory.Count);
     }
     [Fact]
-    public async Task RedisOutageFallsBackAndOldEntriesCannotResurfaceAfterChange()
+    public async Task EvictedEntryReloadsDatabase()
+    {
+        var cache = Cache();
+        await cache.Products();
+        memory.Clear();
+        await cache.Products();
+        source.Verify(x => x.Products(), Times.Exactly(2));
+    }
+    [Fact]
+    public async Task CallersCannotMutateCachedData()
+    {
+        var cache = Cache();
+        var products = await cache.Products();
+        var originalPrice = products[0].PriceCents;
+        products[0].PriceCents = -100;
+        products.Clear();
+        Assert.Equal(originalPrice, (await cache.Products())[0].PriceCents);
+        var statuses = await cache.Statuses();
+        statuses[0].AllowedTransitions[0] = "Invalid";
+        Assert.Equal("Confirmed", (await cache.Statuses())[0].AllowedTransitions[0]);
+        source.Verify(x => x.Products(), Times.Once);
+        source.Verify(x => x.Statuses(), Times.Once);
+    }
+    [Fact]
+    public async Task FailedRefreshDoesNotResurrectStaleDataAndCanRecover()
     {
         var cache = Cache();
         await cache.CheckForChanges();
         await cache.Products();
+        productVersion++;
+        source.Setup(x => x.Products()).ThrowsAsync(new InvalidOperationException("Database unavailable"));
+        await cache.RefreshAfterWrite(); // Committed writes must not fail because refresh failed.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => cache.Products());
         var changed = fixture.CreateMany<Product>(3).ToList();
         source.Setup(x => x.Products()).ReturnsAsync(changed);
-        var unavailable = new TimeoutException("Unavailable");
-        store.Setup(x => x.Get(It.IsAny<string>())).ThrowsAsync(unavailable);
-        store.Setup(x => x.Set(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<TimeSpan>())).ThrowsAsync(unavailable);
-        productVersion++;
-        await cache.RefreshAfterWrite();
         Assert.Equal(3, (await cache.Products()).Count);
-        store.Setup(x => x.Get(It.IsAny<string>())).Returns((string key) => Task.FromResult(values.GetValueOrDefault(key)));
-        store.Setup(x => x.Set(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<TimeSpan>()))
-            .Returns((string key, string json, TimeSpan _) => { values[key] = json; return Task.CompletedTask; });
-        Assert.Equal(3, (await cache.Products()).Count);
-    }
-    [Theory]
-    [InlineData("invalid-json")]
-    [InlineData("{\"ExpiresAt\":\"2026-10-25T01:00:00+00:00\",\"Value\":null}")]
-    public async Task CorruptCacheEntryReloadsDatabase(string invalid)
-    {
-        var cache = Cache();
-        await cache.Products();
-        values[Assert.Single(values.Keys)] = invalid;
-        Assert.Equal(2, (await cache.Products()).Count);
-        source.Verify(x => x.Products(), Times.Exactly(2));
     }
     [Fact]
     public async Task SqlTriggersDetectRawAndEfChangesButIgnoreOrderWritesAndRollbacks()
@@ -156,4 +161,6 @@ public class ReferenceDataCacheTests
         await ReferenceDataSchema.Initialize(db);
         Assert.Equal(beforeProducts + 1, await Version("products"));
     }
+    public void Dispose() => memory.Dispose();
+
 }

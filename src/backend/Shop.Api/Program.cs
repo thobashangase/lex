@@ -1,23 +1,13 @@
 using Microsoft.EntityFrameworkCore;
 using Shop.Api;
-using StackExchange.Redis;
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddDbContext<ShopDb>(o => o.UseSqlite(builder.Configuration.GetConnectionString("Shop") ?? "Data Source=shop.db;Default Timeout=30"));
-builder.Services.AddSingleton<IConnectionMultiplexer>(_ => {
- var options = ConfigurationOptions.Parse(builder.Configuration["Redis:ConnectionString"] ?? "localhost:6379");
- options.AbortOnConnectFail = false;
- options.ConnectRetry = 0;
- options.ConnectTimeout = 1000;
- options.AsyncTimeout = 1000;
- options.BacklogPolicy = BacklogPolicy.FailFast;
- return ConnectionMultiplexer.Connect(options);
-});
-builder.Services.AddSingleton<IReferenceCacheStore, RedisReferenceCacheStore>();
+builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<IReferenceDataSource, ReferenceDataSource>();
 builder.Services.AddSingleton<ReferenceDataCache>();
 builder.Services.AddScoped<IProductCatalog, CachedProductCatalog>();
 builder.Services.AddScoped<PricingService>();
-// Checkout and state transitions remain authoritative even during cache outages or
+// Checkout and state transitions remain authoritative regardless of cached data or
 // the short polling window for external reference-data edits.
 builder.Services.AddScoped(services => new OrderService(services.GetRequiredService<ShopDb>(),
  new PricingService(new ProductCatalog(services.GetRequiredService<ShopDb>())),

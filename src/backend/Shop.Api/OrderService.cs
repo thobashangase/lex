@@ -16,6 +16,7 @@ public class PricingService(IProductCatalog catalog) {
   var products = await catalog.GetProducts(request.Items.Select(x => x.ProductId));
   var lines = request.Items.Select(x => {
    var p = products.SingleOrDefault(p => p.Id == x.ProductId) ?? throw new ShopException($"Product {x.ProductId} is unavailable.");
+   if (p.PriceCents < 0) throw new ShopException($"Product {p.Id} has an invalid negative price.");
    return new QuoteLine(p.Id, p.Name, x.Quantity, p.PriceCents, checked(p.PriceCents * x.Quantity));
   }).ToList();
   var subtotal = lines.Sum(x => x.LineTotalCents);
